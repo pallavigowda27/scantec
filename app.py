@@ -7,11 +7,13 @@ import altair as alt
 import io
 import os
 
+# Dev branch update: add a simple comment so this branch differs from main for the PR comparison.
 from model_utils import get_model, predict_fracture, preprocess_image, enhance_image
 from gradcam import generate_mock_gradcam
 from pdf_utils import generate_pdf_report
-from db_utils import init_db, insert_scan, update_feedback, update_notes, update_report_path, get_recent_scans, authenticate_user, create_user, get_scans_for_user, get_all_scans, get_username, update_password, get_user_email, update_user_email, insert_comment, get_comments_for_scan, log_audit, get_audit_logs, export_scans_to_csv, import_scans_from_csv, send_email
+from db_utils import init_db, insert_scan, update_feedback, update_notes, update_report_path, get_recent_scans, authenticate_user, create_user, get_scans_for_user, get_all_scans, get_username, update_password, get_user_email, update_user_email, insert_comment, get_comments_for_scan, log_audit, get_audit_logs, export_scans_to_csv, import_scans_from_csv, send_email, archive_scan, unarchive_scan, delete_scan, get_archived_scans, get_all_scans_with_filter
 from agent_utils import analyze_xray_image, triage_scan, generate_medical_report, chat_with_assistant
+from language_config import get_text, get_language_list
 
 # Initialize Database
 init_db()
@@ -22,12 +24,30 @@ st.set_page_config(page_title="ScanTec - Fracture Detection", page_icon="🦴", 
 # Custom CSS for Premium Design
 st.markdown("""
     <style>
+    :root {
+        --bg-color: #0d1117;
+        --text-color: #c9d1d9;
+        --header-color: #58a6ff;
+        --button-bg: #238636;
+        --button-hover: #2ea043;
+        --container-bg: #161b22;
+    }
+    
+    body.light-theme {
+        --bg-color: #ffffff;
+        --text-color: #24292e;
+        --header-color: #0366d6;
+        --button-bg: #28a745;
+        --button-hover: #218838;
+        --container-bg: #f6f8fa;
+    }
+    
     .main {
-        background-color: #0d1117;
-        color: #c9d1d9;
+        background-color: var(--bg-color);
+        color: var(--text-color);
     }
     .stButton>button {
-        background-color: #238636;
+        background-color: var(--button-bg);
         color: white;
         border-radius: 6px;
         border: 1px solid rgba(240, 246, 252, 0.1);
@@ -36,21 +56,21 @@ st.markdown("""
         transition: 0.2s ease-in-out;
     }
     .stButton>button:hover {
-        background-color: #2ea043;
+        background-color: var(--button-hover);
         border-color: rgba(240, 246, 252, 0.1);
     }
     h1, h2, h3 {
-        color: #58a6ff !important;
+        color: var(--header-color) !important;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
     .css-1d391kg {
-        background-color: #161b22;
+        background-color: var(--container-bg);
     }
     .st-emotion-cache-16txtl3 {
         padding: 3rem 1.5rem;
     }
     div.stSpinner > div {
-        border-color: #58a6ff transparent transparent transparent;
+        border-color: var(--header-color) transparent transparent transparent;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -123,10 +143,30 @@ def main_app():
     with st.sidebar:
         username = st.session_state.get('username') or get_username(user_id)
         st.markdown(f"### Welcome, {username}")
+        
+        # Theme toggle
+        st.markdown("---")
+        st.markdown("### ⚙️ Settings")
+        if 'theme' not in st.session_state:
+            st.session_state['theme'] = 'dark'
+        
+        theme = st.radio("Theme", ["🌙 Dark", "☀️ Light"], index=0 if st.session_state['theme'] == 'dark' else 1, key="theme_toggle")
+        st.session_state['theme'] = 'dark' if theme == "🌙 Dark" else 'light'
+        
+        # Language selector
+        if 'language' not in st.session_state:
+            st.session_state['language'] = 'en'
+        
+        language_options = get_language_list()
+        language_names = [f"{lang_code}: {lang_name}" for lang_code, lang_name in language_options.items()]
+        selected_language = st.selectbox("Language", language_names, key="language_selector")
+        st.session_state['language'] = selected_language.split(':')[0].strip()
+        
+        st.markdown("---")
         if role == "admin":
-            page = st.radio("Go to", ["Dashboard", "Analytics", "Audit Logs", "EHR Export"])
+            page = st.radio("Go to", ["Dashboard", "Analytics", "Audit Logs", "EHR Export", "Archived Scans"])
         else:
-            page = st.radio("Go to", ["Dashboard", "Profile"])
+            page = st.radio("Go to", ["Dashboard", "Profile", "Archived Scans"])
         
         if st.button("Logout"):
             st.session_state['logged_in'] = False
@@ -146,11 +186,15 @@ def main_app():
             audit_logs_page()
         elif page == "EHR Export":
             ehr_page()
+        elif page == "Archived Scans":
+            archived_scans_page(user_id)
     elif role == "user":
         if page == "Dashboard":
             user_dashboard(user_id)
         elif page == "Profile":
             user_profile(user_id)
+        elif page == "Archived Scans":
+            archived_scans_page(user_id)
 
 def doctor_dashboard(user_id):
     st.header("Doctor Dashboard")
@@ -160,7 +204,7 @@ def doctor_dashboard(user_id):
     search_query = st.text_input("Search by Patient Name or Prediction", "")
     filter_status = st.selectbox("Filter by Report Status", ["All", "Reported", "Pending"])
     
-    scans = get_all_scans()
+    scans = get_all_scans_with_filter(include_archived=False)
     
     # Filter scans
     if search_query:
@@ -207,6 +251,17 @@ def doctor_dashboard(user_id):
                     st.success("Comment added!")
                     st.rerun()
             with col3:
+                st.write("**Actions**")
+                if st.button(f"📋 Archive", key=f"archive_{scan['id']}"):
+                    archive_scan(scan['id'])
+                    log_audit(user_id, "archive_scan", f"Archived scan {scan['id']}")
+                    st.success("Scan archived!")
+                    st.rerun()
+                if st.button(f"🗑️ Delete", key=f"delete_{scan['id']}"):
+                    delete_scan(scan['id'])
+                    log_audit(user_id, "delete_scan", f"Permanently deleted scan {scan['id']}")
+                    st.success("Scan deleted permanently!")
+                    st.rerun()
                 if not scan['report_path'] or not os.path.exists(scan['report_path']):
                     if st.button(f"Generate Report for Scan {scan['id']}", key=f"gen_{scan['id']}"):
                         # Agentic Medical Report Generation
@@ -437,6 +492,46 @@ def ehr_page():
             f.write(uploaded_csv.getbuffer())
         import_scans_from_csv("temp.csv")
         st.success("Imported successfully!")
+
+def archived_scans_page(user_id):
+    st.header("📦 Archived Scans")
+    st.write("Manage your archived X-ray scans")
+    
+    # Get archived scans
+    archived = get_archived_scans(user_id)
+    
+    if not archived:
+        st.info("No archived scans found.")
+        return
+    
+    st.write(f"Total archived scans: {len(archived)}")
+    st.markdown("---")
+    
+    for scan in archived:
+        with st.container():
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col1:
+                st.subheader(f"Patient: {scan['patient_name']} ({scan['patient_age']})")
+                st.write(f"Scan ID: {scan['id']}")
+                st.write(f"Timestamp: {scan['timestamp']}")
+            with col2:
+                priority = scan.get('priority_level', 'Routine')
+                st.write(f"**Priority:** {priority}")
+                st.write(f"Prediction: {scan['prediction']}")
+                st.write(f"Confidence: {scan['confidence']:.2f}%")
+            with col3:
+                st.write("**Actions**")
+                if st.button(f"♻️ Restore", key=f"restore_{scan['id']}"):
+                    unarchive_scan(scan['id'])
+                    log_audit(user_id, "restore_scan", f"Restored scan {scan['id']}")
+                    st.success("Scan restored!")
+                    st.rerun()
+                if st.button(f"🗑️ Delete Permanently", key=f"perm_delete_{scan['id']}"):
+                    delete_scan(scan['id'])
+                    log_audit(user_id, "delete_archived_scan", f"Permanently deleted archived scan {scan['id']}")
+                    st.success("Scan deleted permanently!")
+                    st.rerun()
+            st.markdown("---")
 
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
