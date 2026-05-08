@@ -13,6 +13,7 @@ from gradcam import generate_mock_gradcam
 from pdf_utils import generate_pdf_report
 from db_utils import init_db, insert_scan, update_feedback, update_notes, update_report_path, get_recent_scans, authenticate_user, create_user, get_scans_for_user, get_all_scans, get_username, update_password, get_user_email, update_user_email, insert_comment, get_comments_for_scan, log_audit, get_audit_logs, export_scans_to_csv, import_scans_from_csv, send_email, archive_scan, unarchive_scan, delete_scan, get_archived_scans, get_all_scans_with_filter
 from agent_utils import analyze_xray_image, triage_scan, generate_medical_report, chat_with_assistant
+from language_config import get_text, get_language_list
 
 # Initialize Database
 init_db()
@@ -151,6 +152,15 @@ def main_app():
         
         theme = st.radio("Theme", ["🌙 Dark", "☀️ Light"], index=0 if st.session_state['theme'] == 'dark' else 1, key="theme_toggle")
         st.session_state['theme'] = 'dark' if theme == "🌙 Dark" else 'light'
+        
+        # Language selector
+        if 'language' not in st.session_state:
+            st.session_state['language'] = 'en'
+        
+        language_options = get_language_list()
+        language_names = [f"{lang_code}: {lang_name}" for lang_code, lang_name in language_options.items()]
+        selected_language = st.selectbox("Language", language_names, key="language_selector")
+        st.session_state['language'] = selected_language.split(':')[0].strip()
         
         st.markdown("---")
         if role == "admin":
