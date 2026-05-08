@@ -1,0 +1,8 @@
+streamlit
+opencv-python
+numpy
+Pillow
+reportlab
+pandas
+altair
+openai
