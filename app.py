@@ -7,6 +7,7 @@ import altair as alt
 import io
 import os
 
+# Dev branch update: add a simple comment so this branch differs from main for the PR comparison.
 from model_utils import get_model, predict_fracture, preprocess_image, enhance_image
 from gradcam import generate_mock_gradcam
 from pdf_utils import generate_pdf_report
