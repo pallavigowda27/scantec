@@ -87,6 +87,11 @@ def init_db():
             c.execute("ALTER TABLE scans ADD COLUMN vlm_analysis TEXT")
         except sqlite3.OperationalError:
             pass
+    if 'archived' not in columns:
+        try:
+            c.execute("ALTER TABLE scans ADD COLUMN archived BOOLEAN DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
     
     # Check users table
     c.execute("PRAGMA table_info(users)")
@@ -398,3 +403,54 @@ def send_email(to_email, subject, body):
     except Exception as e:
         print(f"Email send failed: {e}")
         return False
+
+def archive_scan(scan_id):
+    """Archive a scan (soft delete)"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('UPDATE scans SET archived = 1 WHERE id = ?', (scan_id,))
+    conn.commit()
+    conn.close()
+
+def unarchive_scan(scan_id):
+    """Unarchive a scan"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('UPDATE scans SET archived = 0 WHERE id = ?', (scan_id,))
+    conn.commit()
+    conn.close()
+
+def delete_scan(scan_id):
+    """Permanently delete a scan"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Delete comments first (foreign key)
+    c.execute('DELETE FROM comments WHERE scan_id = ?', (scan_id,))
+    # Delete the scan
+    c.execute('DELETE FROM scans WHERE id = ?', (scan_id,))
+    conn.commit()
+    conn.close()
+
+def get_archived_scans(user_id=None):
+    """Get all archived scans"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    if user_id:
+        c.execute('SELECT * FROM scans WHERE archived = 1 AND user_id = ? ORDER BY timestamp DESC', (user_id,))
+    else:
+        c.execute('SELECT * FROM scans WHERE archived = 1 ORDER BY timestamp DESC')
+    scans = [dict(zip([description[0] for description in c.description], row)) for row in c.fetchall()]
+    conn.close()
+    return scans
+
+def get_all_scans_with_filter(include_archived=False):
+    """Get all scans with optional archive filter"""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    if include_archived:
+        c.execute('SELECT * FROM scans ORDER BY timestamp DESC')
+    else:
+        c.execute('SELECT * FROM scans WHERE archived = 0 ORDER BY timestamp DESC')
+    scans = [dict(zip([description[0] for description in c.description], row)) for row in c.fetchall()]
+    conn.close()
+    return scans
